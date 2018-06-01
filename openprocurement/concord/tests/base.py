@@ -1,43 +1,40 @@
 # -*- coding: utf-8 -*-
-import webtest
 import os
-from openprocurement.api.tests.base import PrefixedRequestClass
-from openprocurement.tender.belowthreshold.tests.base import BaseTenderWebTest as APIBaseTenderWebTest
+import unittest
+import couchdb
+import yaml
+from couchdb.design import ViewDefinition
+from datetime import timedelta
+from openprocurement.concord.tests.data import test_tender_data, now
 
 
-class BaseTenderWebTest(APIBaseTenderWebTest):
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+        "tests.yaml"), 'r') as file:
+    CONFIG = yaml.load(file)
 
+conflicts_view = ViewDefinition('conflicts', 'all', '''function(doc) {
+    if (doc._conflicts) {
+        emit(doc._rev, [doc._rev].concat(doc._conflicts));
+    }
+}''')
+
+def add_index_options(doc):
+    doc['options'] = {'local_seq': True}
+
+class BaseTenderWebTest(unittest.TestCase):
     def setUp(self):
-        self.app = webtest.TestApp(
-            "config:tests.ini", relative_to=os.path.dirname(__file__))
-        self.app.RequestClass = PrefixedRequestClass
-        self.app.authorization = ('Basic', ('token', ''))
-        self.couchdb_server = self.app.app.registry.couchdb_server
-        self.db = self.app.app.registry.db
-        self.app2 = webtest.TestApp(
-            "config:tests2.ini", relative_to=os.path.dirname(__file__))
-        self.app2.RequestClass = PrefixedRequestClass
-        self.app2.authorization = ('Basic', ('token', ''))
-        self.db2 = self.app2.app.registry.db
-        # Create tender
-        response = self.app.post_json('/tenders', {'data': self.initial_data})
-        tender = response.json['data']
-        self.tender_id = tender['id']
-        status = tender['status']
-        if self.initial_bids:
-            response = self.set_status('active.tendering')
-            status = response.json['data']['status']
-            bids = []
-            for i in self.initial_bids:
-                response = self.app.post_json('/tenders/{}/bids'.format(self.tender_id), {'data': i})
-                self.assertEqual(response.status, '201 Created')
-                bids.append(response.json['data'])
-            self.initial_bids = bids
-        if self.initial_status != status:
-            self.initial_status
-            self.set_status(self.initial_status)
-
+        self.couch_server = couchdb.Server(CONFIG["couch_url"])
+        self.db1 = self.couch_server.create(CONFIG["db_name_1"])
+        ViewDefinition.sync_many(self.db1, [conflicts_view], callback=add_index_options)
+        self.db2 = self.couch_server.create(CONFIG["db_name_2"])
+        ViewDefinition.sync_many(self.db2, [conflicts_view], callback=add_index_options)
+        
+        self.initial_data = test_tender_data
+        self.tender_id = self.initial_data["id"]
+        self.initial_bids = None
+        self.initial_status = None
+        self.initial_lots = None
+        
     def tearDown(self):
-        del self.db[self.tender_id]
-        del self.couchdb_server[self.db.name]
-        del self.couchdb_server[self.db2.name]
+        del self.couch_server[self.db1.name]
+        del self.couch_server[self.db2.name]

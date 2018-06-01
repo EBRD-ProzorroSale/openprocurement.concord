@@ -2,12 +2,13 @@
 
 import unittest
 
-from openprocurement.concord.tests import conflicts
+from openprocurement.concord.tests import conflicts, test_daemon
 
 
 def suite():
     suite = unittest.TestSuite()
     suite.addTest(conflicts.suite())
+    suite.addTest(test_daemon.suite())
     return suite
 
 
