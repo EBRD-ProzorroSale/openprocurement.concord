@@ -40,6 +40,51 @@ def update_journal_handler_params(params):
                 i._extra[x.upper()] = j
 
 
+def _apply_revisions(c, common_rev, common_index, td):
+    changed = False
+    ctender = c[u'doc']
+    tid = c[u'id']
+    trev = ctender[u'_rev']
+    conflicts = ctender[u'_conflicts']
+    applied = [rev['date'] for rev in ctender['revisions'][common_index:]]
+    for r in conflicts:
+        tt = []
+        t = td[r]
+        revs = t['revisions']
+        for rev in revs[common_index:][::-1]:
+            if 'changes' not in rev:
+                continue
+            tn = t.copy()
+            try:
+                t = _apply_patch(t, rev['changes'])
+            except JsonPatchConflict:
+                LOGGER.error("Can't restore revision", extra={'tenderid': tid, 'rev': trev, 'MESSAGE_ID': 'conflict_error_restore'})
+                return
+            ti = dict([x for x in t.items() if x[0] not in IGNORE])
+            tj = dict([x for x in tn.items() if x[0] not in IGNORE])
+            tt.append((rev['date'], rev, get_revision_changes(ti, tj)))
+        for i in tt[::-1]:
+            if i[0] in applied:
+                continue
+            t = ctender.copy()
+            try:
+                ctender = _apply_patch(t, i[2])
+            except JsonPointerException:
+                LOGGER.error("Can't apply patch", extra={'tenderid': tid, 'rev': trev, 'MESSAGE_ID': 'conflict_error_pointer'})
+                return
+            except JsonPatchConflict:
+                LOGGER.error("Can't apply patch", extra={'tenderid': tid, 'rev': trev, 'MESSAGE_ID': 'conflict_error_patch'})
+                return
+            patch = get_revision_changes(ctender, t)
+            if patch:
+                revision = i[1]
+                revision['changes'] = patch
+                revision['rev'] = common_rev
+                ctender['revisions'].append(revision)
+            applied.append(i[0])
+            changed = True
+    return changed
+
 def conflicts_resolve(db, c, dump_dir=None):
     """ Conflict resolution algorithm """
     changed = False
@@ -82,43 +127,7 @@ def conflicts_resolve(db, c, dump_dir=None):
             LOGGER.error("Can't find common revision", extra={'tenderid': tid, 'rev': trev, 'MESSAGE_ID': 'conflict_error_common'})
             return
         common_index = len(common_chain)
-        applied = [rev['date'] for rev in ctender['revisions'][common_index:]]
-        for r in conflicts:
-            tt = []
-            t = td[r]
-            revs = t['revisions']
-            for rev in revs[common_index:][::-1]:
-                if 'changes' not in rev:
-                    continue
-                tn = t.copy()
-                try:
-                    t = _apply_patch(t, rev['changes'])
-                except JsonPatchConflict:
-                    LOGGER.error("Can't restore revision", extra={'tenderid': tid, 'rev': trev, 'MESSAGE_ID': 'conflict_error_restore'})
-                    return
-                ti = dict([x for x in t.items() if x[0] not in IGNORE])
-                tj = dict([x for x in tn.items() if x[0] not in IGNORE])
-                tt.append((rev['date'], rev, get_revision_changes(ti, tj)))
-            for i in tt[::-1]:
-                if i[0] in applied:
-                    continue
-                t = ctender.copy()
-                try:
-                    ctender = _apply_patch(t, i[2])
-                except JsonPointerException:
-                    LOGGER.error("Can't apply patch", extra={'tenderid': tid, 'rev': trev, 'MESSAGE_ID': 'conflict_error_pointer'})
-                    return
-                except JsonPatchConflict:
-                    LOGGER.error("Can't apply patch", extra={'tenderid': tid, 'rev': trev, 'MESSAGE_ID': 'conflict_error_patch'})
-                    return
-                patch = get_revision_changes(ctender, t)
-                if patch:
-                    revision = i[1]
-                    revision['changes'] = patch
-                    revision['rev'] = common_rev
-                    ctender['revisions'].append(revision)
-                applied.append(i[0])
-                changed = True
+        changed = _apply_revisions(c, common_rev, common_index, td)
     if changed:
         ctender['dateModified'] = get_now().isoformat()
         try:

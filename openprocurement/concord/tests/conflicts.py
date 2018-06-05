@@ -57,8 +57,14 @@ class TenderConflictsTest(BaseTenderWebTest):
             self.db2.get(self.tender_id)["_rev"]
         )
         self.assertGreater(len(self.db1.view('conflicts/all')), 0)
+        
+        tender1 = self.db1.get(self.tender_id, conflicts=True)
+        self.assertEqual(len(tender1["_conflicts"]), 1)
         conflicts_resolve(self.db1)
+        tender1 = self.db1.get(self.tender_id, conflicts=True)
+        self.assertNotIn('_conflicts', tender1)
         self.assertEqual(len(self.db1.view('conflicts/all')), 0)
+
         self.couch_server.replicate(self.db1.name, self.db2.name)
         self.couch_server.replicate(self.db2.name, self.db1.name)
         self.assertEqual(len(self.db1.view('conflicts/all')), 0)
